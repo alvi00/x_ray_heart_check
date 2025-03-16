@@ -25,7 +25,7 @@ from data.utils import transform  # noqa
 disease_classes = ['Cardiomegaly', 'Edema', 'Consolidation', 'Atelectasis', 'Pleural Effusion']
 
 # Argument parser
-parser = argparse.ArgumentParser(description='Predict and generate heatmap for a single chest X-ray image')
+parser = argparse.ArgumentParser(description='Predict and generate heatmap for a single chest X-ray image using Grad-CAM')
 parser.add_argument('--model_path', default='./', type=str,
                     help="Path to the trained models directory (containing cfg.json and pre_train.pth)")
 parser.add_argument('--image_path', type=str, required=True,
@@ -43,10 +43,10 @@ def tensor2numpy(tensor):
 
 def fig2data(fig):
     """Convert Matplotlib figure to a NumPy array using buffer_rgba."""
-    fig.canvas.draw()  # Render the figure
+    fig.canvas.draw()
     w, h = fig.canvas.get_width_height()
     buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-    buf.shape = (h, w, 4)  # Reshape to (height, width, RGBA)
+    buf.shape = (h, w, 4)
     buf = buf[:, :, :3]  # Extract RGB, discard alpha
     buf = buf[:, :, [2, 1, 0]]  # Convert RGB to BGR for OpenCV
     return np.ascontiguousarray(buf)
@@ -61,50 +61,70 @@ def image_reader(image_file, cfg):
     return image, image_color
 
 def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
-    """Generate heatmap adapted from Heatmaper.gen_heatmap."""
+    """Generate heatmap using Grad-CAM."""
     image_tensor, image_color = image_reader(image_file, cfg)
     image_tensor = image_tensor.to(device)
-    
+    image_tensor.requires_grad_(True)  # Enable gradients for Grad-CAM
+
     model.eval()
-    with torch.no_grad():
-        logits, logit_maps = model(image_tensor)
-        logits = torch.stack(logits)
-        logit_maps = torch.stack(logit_maps) if logit_maps else None
-
-    image_np = tensor2numpy(image_tensor)[0, 0, :, :]
-    prob_maps_np = tensor2numpy(torch.sigmoid(logit_maps)) if logit_maps else None
-    logit_maps_np = tensor2numpy(logit_maps) if logit_maps else None
-
-    num_tasks = len(disease_classes)
-    row_ = num_tasks // 3 + 1
-    plt_fig = plt.figure(figsize=(10, row_*4), dpi=300)
     
+    # Hook to capture feature maps from the backbone
+    feat_map = None
+    def hook_fn(module, input, output):
+        nonlocal feat_map
+        feat_map = output
+        feat_map.retain_grad()  # Ensure gradients are retained for this tensor
+    handle = model.backbone.register_forward_hook(hook_fn)
+
+    # Forward pass
+    logits, _ = model(image_tensor)
+    logits = torch.stack(logits)  # (num_tasks, N)
+
+    # Generate Grad-CAM heatmaps for each class
+    heatmaps = []
+    num_tasks = len(disease_classes)
+    for i in range(num_tasks):
+        model.zero_grad()
+        score = logits[i]  # Target the logit for the i-th class
+        score.backward(retain_graph=True)
+        gradients = feat_map.grad  # (N, C, H, W)
+        if gradients is None:
+            raise RuntimeError("Gradients not computed for feat_map. Check model and hook setup.")
+        weights = F.adaptive_avg_pool2d(gradients, 1)  # (N, C, 1, 1)
+        heatmap = torch.sum(weights * feat_map, dim=1).squeeze(0)  # (H, W)
+        heatmap = F.relu(heatmap)  # Positive contributions only
+        heatmap = heatmap / (heatmap.max() + 1e-8)  # Normalize to [0, 1]
+        heatmaps.append(tensor2numpy(heatmap))
+
+    handle.remove()  # Remove the hook
+
+    # Visualization
+    image_np = tensor2numpy(image_tensor)[0, 0, :, :]  # (H, W)
     ori_image = image_np * cfg.pixel_std + cfg.pixel_mean
+    plt_fig = plt.figure(figsize=(10, (num_tasks // 3 + 1) * 4), dpi=300)
+
     for i in range(num_tasks):
         prob = torch.sigmoid(logits[i]).item()
         subtitle = f'{disease_classes[i]}:{prob:.4f}'
-        ax_overlay = plt_fig.add_subplot(row_, 3, 2 + i)
+        ax_overlay = plt_fig.add_subplot(num_tasks // 3 + 1, 3, 2 + i)
         ax_overlay.set_title(subtitle, fontsize=10, color='r')
         ax_overlay.set_yticklabels([])
         ax_overlay.set_xticklabels([])
         ax_overlay.tick_params(axis='both', which='both', length=0)
-
         ax_overlay.imshow(ori_image, cmap='gray', vmin=0, vmax=255)
-        if prob_maps_np is not None:
-            overlay_image = ax_overlay.imshow(cv2.resize(prob_maps_np[i], (cfg.long_side, cfg.long_side)),
-                                             cmap='jet', vmin=0.0, vmax=1.0, alpha=alpha)
+        overlay_image = ax_overlay.imshow(cv2.resize(heatmaps[i], (cfg.long_side, cfg.long_side)),
+                                         cmap='jet', vmin=0.0, vmax=1.0, alpha=alpha)
 
-    ax_rawimage = plt_fig.add_subplot(row_, 3, 1)
+    ax_rawimage = plt_fig.add_subplot(num_tasks // 3 + 1, 3, 1)
     ax_rawimage.set_title('original image', fontsize=10, color='r')
     ax_rawimage.set_yticklabels([])
     ax_rawimage.set_xticklabels([])
     ax_rawimage.tick_params(axis='both', which='both', length=0)
     ax_rawimage.imshow(image_color)
 
-    if prob_maps_np is not None:
-        divider = make_axes_locatable(ax_overlay)
-        ax_colorbar = divider.append_axes("right", size="5%", pad=0.05)
-        plt_fig.colorbar(overlay_image, cax=ax_colorbar)
+    divider = make_axes_locatable(ax_overlay)
+    ax_colorbar = divider.append_axes("right", size="5%", pad=0.05)
+    plt_fig.colorbar(overlay_image, cax=ax_colorbar)
     plt_fig.tight_layout()
 
     figure_data = fig2data(plt_fig)
@@ -113,7 +133,7 @@ def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
     output_path = os.path.join(output_dir, f"heatmap_{os.path.basename(image_file)}")
     cv2.imwrite(output_path, figure_data)
     print(f"Heatmap saved to: {output_path}")
-    return prob_maps_np is not None  # Indicate if heatmap was generated
+    return True
 
 def get_transform(cfg):
     return transforms.Compose([
@@ -149,7 +169,7 @@ def predict_and_heatmap(cfg, args, model):
     model.eval()
     with torch.no_grad():
         output = model(image_tensor.to(device))
-        logits = output[0] if isinstance(output, tuple) else output
+        logits = output[0]  # First element of tuple is logits
         num_tasks = len(cfg.num_classes)
         pred = np.zeros(num_tasks)
         for i in range(num_tasks):
@@ -159,9 +179,7 @@ def predict_and_heatmap(cfg, args, model):
     for label, prob in zip(disease_classes, pred):
         print(f"{label}: {prob:.4f}")
 
-    heatmap_generated = generate_heatmap(args.image_path, model, cfg, args.alpha, device, args.output_dir)
-    if not heatmap_generated:
-        print("Warning: Heatmap generation skipped due to empty logit_maps.")
+    generate_heatmap(args.image_path, model, cfg, args.alpha, device, args.output_dir)
 
 def main():
     global args
@@ -181,7 +199,7 @@ def main():
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(ckpt)
+    model.load_state_dict(ckpt)  # Load directly, no extra layers to filter
     model = model.to(device)
 
     predict_and_heatmap(cfg, args, model)
