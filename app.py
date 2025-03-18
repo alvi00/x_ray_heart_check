@@ -54,7 +54,7 @@ model.load_state_dict(ckpt)
 model.to(device)
 print("Model loaded successfully.")
 
-# Existing functions (unchanged)
+# Existing functions
 def tensor2numpy(tensor):
     return tensor.cpu().detach().numpy()
 
@@ -72,9 +72,38 @@ def image_reader(image_file, cfg):
     image = Image.open(image_file).convert('L')
     transform_fn = get_transform(cfg)
     image_tensor = transform_fn(image).unsqueeze(0)
-    image_color = np.array(image.convert('RGB'))  # For display purposes
+    image_color = np.array(image.convert('RGB'))
     print(f"image_reader shape: {image_tensor.shape}, first few values: {image_tensor[0,0,:5,:5]}")
     return image_tensor, image_color
+
+def is_valid_xray(image):
+    """Stricter check for grayscale X-ray images using multiple validation techniques."""
+    img_array = np.array(image.convert('RGB'))
+    
+    # 1. Check grayscale consistency
+    r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
+    diff_rg = np.mean(np.abs(r - g))
+    diff_rb = np.mean(np.abs(r - b))
+    diff_gb = np.mean(np.abs(g - b))
+    
+    if not (diff_rg < 2 and diff_rb < 2 and diff_gb < 2):
+        print("Image is not grayscale enough.")
+        return False
+    
+
+    # 3. Histogram Analysis (Check grayscale distribution)
+    gray_image = np.array(image.convert('L'))  # Convert to grayscale
+    hist = cv2.calcHist([gray_image], [0], None, [256], [0, 256])
+    peak_intensity = np.argmax(hist)
+    
+    if peak_intensity < 50 or peak_intensity > 200:  # X-rays should have mid-range peaks
+        print(f"Histogram peak outside expected X-ray range: {peak_intensity}")
+        return False
+    
+    
+    print("Image passed all X-ray validation checks.")
+    return True
+
 
 def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
     print(f"Generating heatmap for {image_file}")
@@ -110,17 +139,14 @@ def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
 
     handle.remove()
 
-    # Denormalize and darken the grayscale image
     image_np = tensor2numpy(image_tensor)[0, 0, :, :]
-    ori_image = image_np * cfg.pixel_std + cfg.pixel_mean  # Original range [0, 255]
-    ori_image = ori_image * 0.85  # Reduce brightness by 15% (adjustable)
-    ori_image = np.clip(ori_image, 0, 255)  # Ensure values stay in valid range
+    ori_image = image_np * cfg.pixel_std + cfg.pixel_mean
+    ori_image = ori_image * 0.85  # Darken by 15%
+    ori_image = np.clip(ori_image, 0, 255)
 
-    # Darken the original color image
-    image_color_dark = image_color * 0.85  # Reduce brightness by 15% (adjustable)
-    image_color_dark = np.clip(image_color_dark, 0, 255).astype(np.uint8)  # Ensure valid uint8 range
+    image_color_dark = image_color * 0.85  # Darken by 15%
+    image_color_dark = np.clip(image_color_dark, 0, 255).astype(np.uint8)
 
-    # Create the figure
     plt_fig = plt.figure(figsize=(10, (num_tasks // 3 + 1) * 4), dpi=300)
 
     for i in range(num_tasks):
@@ -140,7 +166,7 @@ def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
     ax_rawimage.set_yticklabels([])
     ax_rawimage.set_xticklabels([])
     ax_rawimage.tick_params(axis='both', which='both', length=0)
-    ax_rawimage.imshow(image_color_dark)  # Use darkened version
+    ax_rawimage.imshow(image_color_dark)
 
     divider = make_axes_locatable(ax_overlay)
     ax_colorbar = divider.append_axes("right", size="5%", pad=0.05)
@@ -180,6 +206,11 @@ def get_pred(output, cfg):
 def process_image(image_path, alpha=0.2):
     print(f"Processing image: {image_path}")
     image = Image.open(image_path).convert('L')
+    
+    # Option 1: Validate if it’s an X-ray-like image (stricter grayscale check)
+    if not is_valid_xray(image):
+        raise ValueError("This doesn’t look like a chest X-ray image. Please upload a valid X-ray.")
+
     transform_fn = get_transform(cfg)
     image_tensor = transform_fn(image).unsqueeze(0).to(device)
 
@@ -191,6 +222,13 @@ def process_image(image_path, alpha=0.2):
         pred = np.zeros(num_tasks)
         for i in range(num_tasks):
             pred[i] = get_pred(logits[i], cfg)
+        print(f"Predictions: {pred}")
+
+    # Option 2: Stricter confidence threshold
+    pred_range = np.max(pred) - np.min(pred)
+    too_confident = np.mean(pred > 0.6) > 0.6  # More than 60% of preds are >60%
+    if pred_range < 0.2 or too_confident:
+        raise ValueError("Predictions are too uniform or overly confident. This might not be a valid X-ray image.")
 
     heatmap_path = generate_heatmap(image_path, model, cfg, alpha, device, app.config['OUTPUT_FOLDER'])
     
