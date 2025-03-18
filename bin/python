@@ -1,0 +1,7 @@
+Predictions for D:\Chexpert\Pleural_Effusion.jpg:
+Cardiomegaly: 0.5496
+Edema: 0.0750
+Consolidation: 0.7129
+Atelectasis: 0.8671
+Pleural Effusion: 0.9353
+Heatmap saved to: ./heatmaps\heatmap_Pleural_Effusion.jpg

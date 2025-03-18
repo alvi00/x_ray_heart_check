@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chest X-Ray Analyzer</title>
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <!-- Custom CSS -->
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #e0eafc, #cfdef3);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin: 0;
+      }
+      .container {
+        background: white;
+        padding: 2rem;
+        border-radius: 15px;
+        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        max-width: 500px;
+        animation: fadeIn 0.5s ease-in-out;
+      }
+      h1 {
+        color: #2c3e50;
+        text-align: center;
+        margin-bottom: 1.5rem;
+      }
+      .btn-custom {
+        background-color: #3498db;
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 25px;
+        transition: transform 0.3s, background-color 0.3s;
+      }
+      .btn-custom:hover {
+        background-color: #2980b9;
+        transform: scale(1.05);
+      }
+      .form-control {
+        border-radius: 10px;
+        box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.05);
+      }
+      .error {
+        color: #e74c3c;
+        text-align: center;
+        margin-top: 1rem;
+        animation: shake 0.5s;
+      }
+      .spinner-container {
+        display: none; /* Hidden by default */
+        text-align: center;
+        margin-top: 1rem;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(-20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes shake {
+        0%,
+        100% {
+          transform: translateX(0);
+        }
+        25% {
+          transform: translateX(-5px);
+        }
+        75% {
+          transform: translateX(5px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Chest X-Ray Analyzer</h1>
+      <form method="post" enctype="multipart/form-data" id="upload-form">
+        <div class="mb-3">
+          <input
+            type="file"
+            name="file"
+            class="form-control"
+            accept=".jpg,.jpeg,.png"
+            required
+          />
+        </div>
+        <button type="submit" class="btn btn-custom w-100">Analyze</button>
+      </form>
+      <div class="spinner-container" id="spinner">
+        <div class="spinner-border text-primary" role="status">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+      </div>
+      {% if error %}
+      <p class="error">{{ error }}</p>
+      {% endif %}
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      document
+        .getElementById("upload-form")
+        .addEventListener("submit", function (e) {
+          // Show spinner without modifying form structure
+          document.getElementById("spinner").style.display = "block";
+          // Don’t prevent default behavior; let the form submit naturally
+        });
+    </script>
+  </body>
+</html>
