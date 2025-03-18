@@ -110,8 +110,17 @@ def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
 
     handle.remove()
 
+    # Denormalize and darken the grayscale image
     image_np = tensor2numpy(image_tensor)[0, 0, :, :]
-    ori_image = image_np * cfg.pixel_std + cfg.pixel_mean
+    ori_image = image_np * cfg.pixel_std + cfg.pixel_mean  # Original range [0, 255]
+    ori_image = ori_image * 0.85  # Reduce brightness by 15% (adjustable)
+    ori_image = np.clip(ori_image, 0, 255)  # Ensure values stay in valid range
+
+    # Darken the original color image
+    image_color_dark = image_color * 0.85  # Reduce brightness by 15% (adjustable)
+    image_color_dark = np.clip(image_color_dark, 0, 255).astype(np.uint8)  # Ensure valid uint8 range
+
+    # Create the figure
     plt_fig = plt.figure(figsize=(10, (num_tasks // 3 + 1) * 4), dpi=300)
 
     for i in range(num_tasks):
@@ -131,7 +140,7 @@ def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
     ax_rawimage.set_yticklabels([])
     ax_rawimage.set_xticklabels([])
     ax_rawimage.tick_params(axis='both', which='both', length=0)
-    ax_rawimage.imshow(image_color)
+    ax_rawimage.imshow(image_color_dark)  # Use darkened version
 
     divider = make_axes_locatable(ax_overlay)
     ax_colorbar = divider.append_axes("right", size="5%", pad=0.05)
