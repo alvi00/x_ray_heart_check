@@ -69,12 +69,12 @@ def fig2data(fig):
 
 def image_reader(image_file, cfg):
     print(f"Reading image: {image_file}")
-    image_gray = cv2.imread(image_file, 0)
-    assert image_gray is not None, f"Invalid image read: {image_file}"
-    image_color = cv2.cvtColor(image_gray, cv2.COLOR_GRAY2RGB)
-    image = transform(image_gray, cfg)
-    image = torch.from_numpy(image).unsqueeze(0)
-    return image, image_color
+    image = Image.open(image_file).convert('L')
+    transform_fn = get_transform(cfg)
+    image_tensor = transform_fn(image).unsqueeze(0)
+    image_color = np.array(image.convert('RGB'))  # For display purposes
+    print(f"image_reader shape: {image_tensor.shape}, first few values: {image_tensor[0,0,:5,:5]}")
+    return image_tensor, image_color
 
 def generate_heatmap(image_file, model, cfg, alpha, device, output_dir):
     print(f"Generating heatmap for {image_file}")
